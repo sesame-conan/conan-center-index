@@ -10,6 +10,14 @@ sources:
       "Macos":
           url: https://dl.google.com/android/repository/android-ndk-r21d-darwin-x86_64.zip
           sha256: 5851115c6fc4cce26bc320295b52da240665d7ff89bda2f5d5af1887582f5c48
+  "r21e":
+    url:
+      "Windows":
+          url: https://dl.google.com/android/repository/android-ndk-r21e-windows-x86_64.zip
+      "Linux":
+          url: https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
+      "Macos":
+          url: https://dl.google.com/android/repository/android-ndk-r21e-darwin-x86_64.zip
   "r22":
     url:
       "Windows":

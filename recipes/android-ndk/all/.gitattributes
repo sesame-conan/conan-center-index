@@ -1,0 +1,2 @@
+cmake-wrapper text eol=lf
+cmake-wrapper.cmd text eol=crlf

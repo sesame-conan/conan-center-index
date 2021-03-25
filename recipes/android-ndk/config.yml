@@ -2,5 +2,7 @@
     versions:
       "r21d":
         folder: all
+      "r21e":
+        folder: all
       "r22":
         folder: all
