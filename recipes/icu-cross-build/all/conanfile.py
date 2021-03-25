@@ -6,8 +6,8 @@ import shutil
 from conans import ConanFile, tools, AutoToolsBuildEnvironment
 
 
-class ICUBase(ConanFile):
-    name = "icu"
+class ICUCrossBuildBase(ConanFile):
+    name = "icu-cross-build"
     homepage = "http://site.icu-project.org"
     license = "ICU"
     description = "ICU is a mature, widely used set of C/C++ and Java libraries " \
@@ -16,18 +16,8 @@ class ICUBase(ConanFile):
     topics = ("conan", "icu", "icu4c", "i see you", "unicode")
     settings = "os", "arch", "compiler", "build_type"
     exports_sources = "patches/*.patch"
-    options = {"shared": [True, False],
-               "fPIC": [True, False],
-               "data_packaging": ["files", "archive", "library", "static"],
-               "with_unit_tests": [True, False],
-               "silent": [True, False],
-               "with_dyload": [True, False]}
-    default_options = {"shared": False,
-                       "fPIC": True,
-                       "data_packaging": "archive",
-                       "with_unit_tests": False,
-                       "silent": True,
-                       "with_dyload": True}
+    options = {"silent": [True, False]}
+    default_options = {"silent": True}
 
     _env_build = None
 
@@ -51,17 +41,11 @@ class ICUBase(ConanFile):
     def _make_tool(self):
         return "make" if self.settings.os != "FreeBSD" else "gmake"
 
-    def config_options(self):
-        if self.settings.os == "Windows":
-            del self.options.fPIC
-
-    def configure(self):
-        if self.options.shared:
-            del self.options.fPIC
-
     def package_id(self):
-        del self.info.options.with_unit_tests  # ICU unit testing shouldn't affect the package's ID
         del self.info.options.silent  # Verbosity doesn't affect package's ID
+
+        del self.info.settings.compiler
+        del self.info.settings.build_type
 
     def build_requirements(self):
         if tools.os_info.is_windows and not tools.get_env("CONAN_BASH_PATH"):
@@ -99,17 +83,12 @@ class ICUBase(ConanFile):
                                                                       silent=self._silent,
                                                                       cpu_count=tools.cpu_count())
                     self.run(command, win_bash=tools.os_info.is_windows)
-                    if self.options.with_unit_tests:
-                        command = "{make} {silent} check".format(make=self._make_tool,
-                                                                 silent=self._silent)
-                        self.run(command, win_bash=tools.os_info.is_windows)
 
     def _configure_autotools(self):
         if self._env_build:
             return self._env_build
         self._env_build = AutoToolsBuildEnvironment(self)
-        if not self.options.shared:
-            self._env_build.defines.append("U_STATIC_IMPLEMENTATION")
+        self._env_build.defines.append("U_STATIC_IMPLEMENTATION")
         if tools.is_apple_os(self.settings.os):
             self._env_build.defines.append("_DARWIN_C_SOURCE")
         if "msys2" in self.deps_user_info:
@@ -132,7 +111,6 @@ class ICUBase(ConanFile):
                     ("Windows", "gcc"): "MinGW",
                     ("AIX", "gcc"): "AIX/GCC",
                     ("AIX", "xlc"): "AIX",
-                    ("Android", 'clang'): "Linux",
                     ("SunOS", "gcc"): "Solaris/GCC",
                     ("Linux", "gcc"): "Linux/gcc",
                     ("Linux", "clang"): "Linux",
@@ -146,18 +124,18 @@ class ICUBase(ConanFile):
         bits = "64" if self.settings.arch in arch64 else "32"
         args = [platform,
                 "--prefix={0}".format(prefix),
+                "--with-library-bits={0}".format(bits),
+                "--enable-static",
+                "--disable-shared",
+                "--disable-strict",
+                "--disable-icuio",
+                "--disable-tests",
                 "--disable-samples",
                 "--disable-layout",
                 "--disable-layoutex",
-                "--disable-extras"]
-
-        if not self.options.with_dyload:
-            args += ["--disable-dyload"]
-
-        if tools.cross_building:
-            args += [f"--with-cross-build={tools.get_env('ICU_CROSS_BUILD')}"]
-        else:
-            args += ["--with-library-bits={0}".format(bits)]
+                "--disable-extras",
+                "--disable-dyload"
+                ]
 
         env_build = self._configure_autotools()
         if tools.cross_building(self.settings, skip_x64_x86=True):
@@ -168,16 +146,9 @@ class ICUBase(ConanFile):
             if env_build.target:
                 args.append("--target=%s" % env_build.target)
 
-        args.append("--with-data-packaging={0}".format(self.options.data_packaging))
-        datadir = os.path.join(self.package_folder, "lib")
-        datadir = datadir.replace("\\", "/") if tools.os_info.is_windows else datadir
-        args.append("--datarootdir=%s" % datadir)  # do not use share
         bindir = os.path.join(self.package_folder, "bin")
         bindir = bindir.replace("\\", "/") if tools.os_info.is_windows else bindir
         args.append("--sbindir=%s" % bindir)
-        libdir = os.path.join(self.package_folder, "lib")
-        libdir = libdir.replace("\\", "/") if tools.os_info.is_windows else libdir
-        args.append("--libdir=%s" % libdir)
 
         if self._is_mingw:
             mingw_chost = "i686-w64-mingw32" if self.settings.arch == "x86" else "x86_64-w64-mingw32"
@@ -186,12 +157,7 @@ class ICUBase(ConanFile):
 
         if self.settings.build_type == "Debug":
             args.extend(["--disable-release", "--enable-debug"])
-        if self.options.shared:
-            args.extend(["--disable-static", "--enable-shared"])
-        else:
-            args.extend(["--enable-static", "--disable-shared"])
-        if not self.options.with_unit_tests:
-            args.append("--disable-tests")
+
         return "../source/runConfigureICU %s" % " ".join(args)
 
     @property
@@ -214,13 +180,11 @@ class ICUBase(ConanFile):
         for dll in glob.glob(os.path.join(self.package_folder, "lib", "*.dll")):
             shutil.move(dll, os.path.join(self.package_folder, "bin"))
 
-        if self.options.data_packaging in ["files", "archive"]:
-            tools.mkdir(os.path.join(self.package_folder, "res"))
-            shutil.move(self._data_path, os.path.join(self.package_folder, "res"))
+        #self.copy("icu*", dst="bin", src=os.path.join(build_dir, "bin"))
+        self.copy("*", dst="config", src=os.path.join(build_dir, "config"))
 
-        tools.rmdir(os.path.join(self.package_folder, "lib", "icu"))
-        tools.rmdir(os.path.join(self.package_folder, "lib", "man"))
-        tools.rmdir(os.path.join(self.package_folder, "lib", "pkgconfig"))
+        tools.rmdir(os.path.join(self.package_folder, "lib"))
+        tools.rmdir(os.path.join(self.package_folder, "inculde"))
         tools.rmdir(os.path.join(self.package_folder, "share"))
 
     def _install_name_tool(self):
@@ -245,81 +209,12 @@ class ICUBase(ConanFile):
         return "icudt{}l.dat".format(vtag)
 
     def package_info(self):
-        self.cpp_info.names["cmake_find_package"] = "ICU"
-        self.cpp_info.names["cmake_find_package_multi"] = "ICU"
-
-        # icudata
-        self.cpp_info.components["icu-data"].names["cmake_find_package"] = "data"
-        self.cpp_info.components["icu-data"].names["cmake_find_package_multi"] = "data"
-        self.cpp_info.components["icu-data"].libs = [self._lib_name("icudt" if self.settings.os == "Windows" else "icudata")]
-        if not self.options.shared:
-            self.cpp_info.components["icu-data"].defines.append("U_STATIC_IMPLEMENTATION")
-
-        # icu uses c++, so add the c++ runtime
-        if tools.stdcpp_library(self):
-            self.cpp_info.components["icu-data"].system_libs.append(tools.stdcpp_library(self))
-
-        # Alias of data CMake component
-        self.cpp_info.components["icu-data-alias"].names["cmake_find_package"] = "dt"
-        self.cpp_info.components["icu-data-alias"].names["cmake_find_package_multi"] = "dt"
-        self.cpp_info.components["icu-data-alias"].requires = ["icu-data"]
-
-        # icuuc
-        self.cpp_info.components["icu-uc"].names["cmake_find_package"] = "uc"
-        self.cpp_info.components["icu-uc"].names["cmake_find_package_multi"] = "uc"
-        self.cpp_info.components["icu-uc"].names["pkg_config"] = "icu-uc"
-        self.cpp_info.components["icu-uc"].libs = [self._lib_name("icuuc")]
-        self.cpp_info.components["icu-uc"].requires = ["icu-data"]
-        if self.settings.os in ["Linux", "FreeBSD"]:
-            self.cpp_info.components["icu-uc"].system_libs = ["m", "pthread"]
-            if self.options.with_dyload:
-                self.cpp_info.components["icu-uc"].system_libs.append("dl")
-        elif self.settings.os == "Windows":
-            self.cpp_info.components["icu-uc"].system_libs = ["advapi32"]
-
-        # icui18n
-        self.cpp_info.components["icu-i18n"].names["cmake_find_package"] = "i18n"
-        self.cpp_info.components["icu-i18n"].names["cmake_find_package_multi"] = "i18n"
-        self.cpp_info.components["icu-i18n"].names["pkg_config"] = "icu-i18n"
-        self.cpp_info.components["icu-i18n"].libs = [self._lib_name("icuin" if self.settings.os == "Windows" else "icui18n")]
-        self.cpp_info.components["icu-i18n"].requires = ["icu-uc"]
-        if self.settings.os in ["Linux", "FreeBSD"]:
-            self.cpp_info.components["icu-i18n"].system_libs = ["m"]
-
-        # Alias of i18n CMake component
-        self.cpp_info.components["icu-i18n-alias"].names["cmake_find_package"] = "in"
-        self.cpp_info.components["icu-i18n-alias"].names["cmake_find_package_multi"] = "in"
-        self.cpp_info.components["icu-i18n-alias"].requires = ["icu-i18n"]
-
-        # icuio
-        self.cpp_info.components["icu-io"].names["cmake_find_package"] = "io"
-        self.cpp_info.components["icu-io"].names["cmake_find_package_multi"] = "io"
-        self.cpp_info.components["icu-io"].names["pkg_config"] = "icu-io"
-        self.cpp_info.components["icu-io"].libs = [self._lib_name("icuio")]
-        self.cpp_info.components["icu-io"].requires = ["icu-i18n", "icu-uc"]
-
-        # icutu
-        self.cpp_info.components["icu-tu"].names["cmake_find_package"] = "tu"
-        self.cpp_info.components["icu-tu"].names["cmake_find_package_multi"] = "tu"
-        self.cpp_info.components["icu-tu"].libs = [self._lib_name("icutu")]
-        self.cpp_info.components["icu-tu"].requires = ["icu-i18n", "icu-uc"]
-        if self.settings.os in ["Linux", "FreeBSD"]:
-            self.cpp_info.components["icu-tu"].system_libs = ["pthread"]
-
-        # icutest
-        self.cpp_info.components["icu-test"].names["cmake_find_package"] = "test"
-        self.cpp_info.components["icu-test"].names["cmake_find_package_multi"] = "test"
-        self.cpp_info.components["icu-test"].libs = [self._lib_name("icutest")]
-        self.cpp_info.components["icu-test"].requires = ["icu-tu", "icu-uc"]
-
-        if self.options.data_packaging in ["files", "archive"]:
-            data_path = os.path.join(self.package_folder, "res", self._data_filename).replace("\\", "/")
-            self.output.info("Appending ICU_DATA environment variable: {}".format(data_path))
-            self.env_info.ICU_DATA.append(data_path)
-
         bin_path = os.path.join(self.package_folder, "bin")
         self.output.info("Appending PATH environment variable: {}".format(bin_path))
         self.env_info.PATH.append(bin_path)
+
+        # for using as a cross build helper
+        self.env_info.ICU_CROSS_BUILD = self.package_folder
 
     def _lib_name(self, lib):
         name = lib
