@@ -3,7 +3,7 @@ from conan.tools.microsoft import is_msvc, is_msvc_static_runtime
 from conan import ConanFile, Version
 from conan.tools import files
 from conan.errors import ConanInvalidConfiguration
-from conans import CMake
+from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
 import functools
 import os
 
@@ -66,24 +66,66 @@ class OpenImageIOConan(ConanFile):
     }
 
     short_paths = True
-    generators = "cmake", "cmake_find_package"
-
-    @property
-    def _source_subfolder(self):
-        return "source_subfolder"
-
-    @property
-    def _build_subfolder(self):
-        return "build_subfolder"
 
     def export_sources(self):
-        self.copy("CMakeLists.txt")
-        for patch in self.conan_data.get("patches", {}).get(self.version, []):
-            self.copy(patch["patch_file"])
+        files.export_conandata_patches(self)
+        #for patch in self.conan_data.get("patches", {}).get(self.version, []):
+        #    self.copy(patch["patch_file"])
 
     def config_options(self):
         if self.settings.os == "Windows":
             del self.options.fPIC
+
+    def layout(self):
+        cmake_layout(self, src_folder="src")
+
+    def generate(self):
+        tc = CMakeToolchain(self)
+        tc.variables["CMAKE_DEBUG_POSTFIX"] = ""
+        tc.variables["OIIO_BUILD_TOOLS"] = True
+        tc.variables["OIIO_BUILD_TESTS"] = False
+        tc.variables["BUILD_DOCS"] = False
+        tc.variables["INSTALL_DOCS"] = False
+        tc.variables["INSTALL_FONTS"] = False
+        tc.variables["INSTALL_CMAKE_HELPER"] = False
+        tc.variables["EMBEDPLUGINS"] = True
+        tc.variables["USE_PYTHON"] = False
+        tc.variables["USE_EXTERNAL_PUGIXML"] = True
+
+        tc.variables["USE_JPEGTURBO"] = (self.options.with_libjpeg == "libjpeg-turbo")
+        tc.variables["USE_JPEG"] = True  # Needed for jpeg.imageio plugin, libjpeg/libjpeg-turbo selection still works
+
+        tc.variables["USE_HDF5"] = self.options.with_hdf5
+        tc.variables["USE_OPENCOLORIO"] = self.options.with_opencolorio
+        tc.variables["USE_OPENCV"] = self.options.with_opencv
+        tc.variables["USE_TBB"] = self.options.with_tbb
+        tc.variables["USE_DCMTK"] = self.options.with_dicom
+        tc.variables["USE_FFMPEG"] = self.options.with_ffmpeg
+        tc.variables["USE_FIELD3D"] = False
+        tc.variables["USE_GIF"] = self.options.with_giflib
+        tc.variables["USE_LIBHEIF"] = self.options.with_libheif
+        tc.variables["USE_LIBRAW"] = self.options.with_raw
+        tc.variables["USE_OPENVDB"] = self.options.with_openvdb
+        tc.variables["USE_PTEX"] = self.options.with_ptex
+        tc.variables["USE_R3DSDK"] = False
+        tc.variables["USE_NUKE"] = False
+        tc.variables["USE_OPENGL"] = False
+        tc.variables["USE_QT"] = False
+        tc.variables["USE_LIBPNG"] = self.options.with_libpng
+        tc.variables["USE_FREETYPE"] = self.options.with_freetype
+        tc.variables["USE_LIBWEBP"] = self.options.with_libwebp
+        tc.variables["USE_OPENJPEG"] = self.options.with_openjpeg
+
+        tc.variables['BUILD_MISSING_FMT'] = False
+        tc.variables['INTERNALIZE_FMT'] = False
+
+        if self.options.with_openvdb:
+            tc.variables["CMAKE_CXX_STANDARD"] = 14
+
+        tc.cache_variables["BUILD_SHARED_LIBS"] = bool(self.options.shared)
+        tc.generate()
+        deps = CMakeDeps(self)
+        deps.generate()
 
     def configure(self):
         if self.options.shared:
@@ -92,17 +134,17 @@ class OpenImageIOConan(ConanFile):
     def requirements(self):
         # Required libraries
         self.requires("zlib/1.2.13")
-        self.requires("boost/1.78.0")
-        self.requires("libtiff/4.4.0")
-        self.requires("openexr/2.5.7")
+        self.requires("boost/1.82.0")
+        self.requires("libtiff/4.5.0")
+        self.requires("openexr/3.1.7")
         if self.options.with_libjpeg == "libjpeg":
             self.requires("libjpeg/9e")
         elif self.options.with_libjpeg == "libjpeg-turbo":
-            self.requires("libjpeg-turbo/2.1.2")
+            self.requires("libjpeg-turbo/2.1.5.1")
         self.requires("pugixml/1.12.1")
         self.requires("libsquish/1.15")
         self.requires("tsl-robin-map/1.0.1")
-        self.requires("fmt/8.1.1")
+        self.requires("fmt/9.1.0")
 
         # Optional libraries
         if self.options.with_libpng:
@@ -138,7 +180,7 @@ class OpenImageIOConan(ConanFile):
         if self.options.with_ptex:
             self.requires("ptex/2.4.0")
         if self.options.with_libwebp:
-            self.requires("libwebp/1.2.4")
+            self.requires("libwebp/1.3.0")
         # TODO: R3DSDK dependency
         # TODO: Nuke dependency
 
@@ -154,81 +196,35 @@ class OpenImageIOConan(ConanFile):
             )
 
     def source(self):
-        files.get(
-            self,
-            **self.conan_data["sources"][self.version],
-            strip_root=True,
-            destination=self._source_subfolder
-        )
+        files.get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def _patch_sources(self):
+        files.replace_in_file(self, f'{self.source_folder}/src/cmake/compiler.cmake', 'set (CMAKE_CXX_STANDARD 14', f'set (CMAKE_CXX_STANDARD {self.settings.compiler.cppstd}')
+        files.replace_in_file(self, f'{self.source_folder}/src/cmake/compiler.cmake', 'add_compile_options (/W1)', f'string(REPLACE W3 W1 CMAKE_CXX_FLAGS ${{CMAKE_CXX_FLAGS}})')
+
+
+        files.replace_in_file(self, f'{self.source_folder}/src/cmake/externalpackages.cmake', 'add_definitions (-DOPENEXR_DLL)', f'#add_definitions (-DOPENEXR_DLL)')
+        files.replace_in_file(self, f'{self.source_folder}/src/cmake/externalpackages.cmake', 'add_definitions (-DBOOST_ALL_DYN_LINK=1)', f'#add_definitions (-DBOOST_ALL_DYN_LINK=1)')
+        files.replace_in_file(self, f'{self.source_folder}/src/cmake/externalpackages.cmake', 'OPENEXR_VERSION VERSION_GREATER_EQUAL 3.0', f'OpenEXR_VERSION VERSION_GREATER_EQUAL 3.0')
+
+
         files.apply_conandata_patches(self)
-
-    @functools.lru_cache(1)
-    def _configure_cmake(self):
-        cmake = CMake(self)
-
-        # CMake options
-        cmake.definitions["CMAKE_DEBUG_POSTFIX"] = ""  # Needed for 2.3.x.x+ versions
-        cmake.definitions["OIIO_BUILD_TOOLS"] = True
-        cmake.definitions["OIIO_BUILD_TESTS"] = False
-        cmake.definitions["BUILD_DOCS"] = False
-        cmake.definitions["INSTALL_DOCS"] = False
-        cmake.definitions["INSTALL_FONTS"] = False
-        cmake.definitions["INSTALL_CMAKE_HELPER"] = False
-        cmake.definitions["EMBEDPLUGINS"] = True
-        cmake.definitions["USE_PYTHON"] = False
-        cmake.definitions["USE_EXTERNAL_PUGIXML"] = True
-
-        # OIIO CMake files are patched to check USE_* flags to require or not use dependencies
-        cmake.definitions["USE_JPEGTURBO"] = (
-            self.options.with_libjpeg == "libjpeg-turbo"
-        )
-        cmake.definitions[
-            "USE_JPEG"
-        ] = True  # Needed for jpeg.imageio plugin, libjpeg/libjpeg-turbo selection still works
-        cmake.definitions["USE_HDF5"] = self.options.with_hdf5
-        cmake.definitions["USE_OPENCOLORIO"] = self.options.with_opencolorio
-        cmake.definitions["USE_OPENCV"] = self.options.with_opencv
-        cmake.definitions["USE_TBB"] = self.options.with_tbb
-        cmake.definitions["USE_DCMTK"] = self.options.with_dicom
-        cmake.definitions["USE_FFMPEG"] = self.options.with_ffmpeg
-        cmake.definitions["USE_FIELD3D"] = False
-        cmake.definitions["USE_GIF"] = self.options.with_giflib
-        cmake.definitions["USE_LIBHEIF"] = self.options.with_libheif
-        cmake.definitions["USE_LIBRAW"] = self.options.with_raw
-        cmake.definitions["USE_OPENVDB"] = self.options.with_openvdb
-        cmake.definitions["USE_PTEX"] = self.options.with_ptex
-        cmake.definitions["USE_R3DSDK"] = False
-        cmake.definitions["USE_NUKE"] = False
-        cmake.definitions["USE_OPENGL"] = False
-        cmake.definitions["USE_QT"] = False
-        cmake.definitions["USE_LIBPNG"] = self.options.with_libpng
-        cmake.definitions["USE_FREETYPE"] = self.options.with_freetype
-        cmake.definitions["USE_LIBWEBP"] = self.options.with_libwebp
-        cmake.definitions["USE_OPENJPEG"] = self.options.with_openjpeg
-
-        if self.options.with_openvdb:
-            cmake.definitions["CMAKE_CXX_STANDARD"] = 14
-
-        cmake.configure(build_folder=self._build_subfolder)
-        return cmake
 
     def build(self):
         self._patch_sources()
-
-        cmake = self._configure_cmake()
+        cmake = CMake(self)
+        cmake.configure()
         cmake.build()
 
     def package(self):
-        cmake = self._configure_cmake()
+        cmake = CMake(self)
         cmake.install()
 
         files.rmdir(self, os.path.join(self.package_folder, "lib", "cmake"))
         files.rmdir(self, os.path.join(self.package_folder, "lib", "pkgconfig"))
         files.rmdir(self, os.path.join(self.package_folder, "share"))
 
-        self.copy("LICENSE.md", src=self._source_subfolder, dst="licenses")
+        files.copy(self, "LICENSE.md", src=self.source_folder, dst="licenses")
 
     def package_info(self):
         self.cpp_info.set_property("cmake_file_name", "OpenImageIO")
@@ -311,12 +307,3 @@ class OpenImageIOConan(ConanFile):
 
         if not self.options.shared:
             self.cpp_info.components["main"].defines.append("OIIO_STATIC_DEFINE")
-
-        # TODO: to remove in conan v2 once cmake_find_package* & pkg_config generators removed
-        self.cpp_info.names["cmake_find_package"] = "OpenImageIO"
-        self.cpp_info.names["cmake_find_package_multi"] = "OpenImageIO"
-        self.cpp_info.names["pkg_config"] = "OpenImageIO"
-        self.cpp_info.components["openimageio_util"].names[
-            "cmake_find_package"
-        ] = "OpenImageIO_Util"
-        self.cpp_info.components["main"].names["cmake_find_package"] = "OpenImageIO"
